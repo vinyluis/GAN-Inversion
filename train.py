@@ -7,6 +7,7 @@ from math import ceil, log2
 
 import pandas as pd
 from matplotlib import pyplot as plt
+import wandb
 
 os.environ['TF_CPP_MIN_LOG_LEVEL'] = '2'  # Silencia o TF (https://stackoverflow.com/questions/35911252/disable-tensorflow-debugging-information)
 import tensorflow as tf
@@ -17,9 +18,9 @@ import utils
 
 #%% Weights & Biases
 
-import wandb
-# wandb.init(project='gan_inversion', entity='vinyluis', mode="disabled")
-wandb.init(project='gan_inversion', entity='vinyluis', mode="online")
+wandb.init(project='gan_inversion', entity='vinyluis', mode="disabled")
+# wandb.init(project='gan_inversion', entity='vinyluis', mode="online")
+# wandb.init(project='gan_inversion', entity='vinyluis', mode="online", resume="")
 
 #%% Config Tensorflow
 
@@ -52,37 +53,45 @@ config.LEARNING_RATE_G = 1e-3
 config.LEARNING_RATE_D = 1e-3
 config.EPOCHS = 3
 config.LAMBDA_GP = 10 # Intensidade do Gradient Penalty da WGAN-GP
+config.CACHE_DATASET = True
+config.USE_RANDOM_JITTER = False
 # config.ADAM_BETA_1 = 0.5 #0.5 para a PatchGAN e 0.9 para a WGAN - Definido no código
 
 # Parâmetros de modelo
 config.DISENTANGLEMENT = False
 config.VEC_SIZE = 256
-config.IMG_SIZE = 32 # Tamanho da imagem no treinamento direto, ou tamanho máximo no caso do treinamento progressivo
 config.EVALUATE_ACCURACY = False
 config.DISCRIMINATOR_USE_LOGITS = True
+config.IMG_SIZE = 64 # Tamanho da imagem no treinamento direto, ou tamanho máximo no caso do treinamento progressivo
+# config.update({"IMG_SIZE" : 64}, allow_val_change = True)
 
 # Específico do treinamento progressivo
-config.BATCH_SIZES = [64, 32, 32, 16, 16, 16, 16, 8, 4]
-config.EPOCHS_FADE_IN = 3 # Quantas épocas por "step" de crescimento faremos o fade-in (variação do alpha)
-config.EPOCHS_NORMAL = 3 # Quantas épocas por "step" de crescimento após o final do fade-in
+config.BATCH_SIZES = [64, 32, 32, 16, 4, 4, 2, 2, 1]
+# config.update({"BATCH_SIZES" : [64, 32, 32, 16, 4, 4, 2, 2, 1]}, allow_val_change = True)
+config.EPOCHS_FADE_IN = 10 # Quantas épocas por "step" de crescimento faremos o fade-in (variação do alpha)
+config.EPOCHS_NORMAL = 10 # Quantas épocas por "step" de crescimento após o final do fade-in
 config.CHANNELS = 256 # Quantidade máxima de canais para o treinamento progressivo
 config.STEPS = int(log2(config.IMG_SIZE / 4)) # Quantidade de "steps" até chegar em IMG_SIZE
+# config.update({"STEPS" : int(log2(config.IMG_SIZE / 4))}, allow_val_change = True)
 
 # Parâmetros de plot
 config.QUIET_PLOT = True
 config.NUM_TEST_PRINTS = 10
 
 # Controle do Checkpoint
-config.SAVE_CHECKPOINT = False
-config.LOAD_CHECKPOINT = False
+config.SAVE_CHECKPOINT = True
+config.LOAD_CHECKPOINT = True
 config.CHECKPOINT_EPOCHS = 1
 config.KEEP_CHECKPOINTS = 1
 config.SAVE_MODELS = False
 
+# Permite alterar variáveis do config
+wandb.config.update(config, allow_val_change = True)
+
 #%% CONTROLE DA ARQUITETURA
 
 # Código do experimento (se não houver, deixar "")
-config.exp = "05B"
+config.exp = "05F"
 
 # Modelo do gerador. Possíveis direto = 'dcgan', 'pix2pix_adapted', 'resnet_decoder', 'simple_decoder'
 # Possíveis com treinamento progressivo = 'progan'
@@ -95,15 +104,15 @@ config.disc_model = 'progan'
 # Tipo de treinamento. Possíveis = 'direct', 'progressive'
 config.training_type = 'progressive'
 
-# Tipo de loss. Possíveis = 'patchganloss', 'wgan', 'wgan-gp'
+# Tipo de loss. Possíveis = 'ganloss', 'wgan', 'wgan-gp'
 config.loss_type = 'wgan-gp'
 
 
 # Valida se pode ser usado o tipo de loss com o tipo de discriminador
-if config.loss_type == 'patchganloss':
+if config.loss_type == 'ganloss':
     config.ADAM_BETA_1 = 0.5
 elif config.loss_type == 'wgan' or config.loss_type == 'wgan-gp':
-    config.ADAM_BETA_1 = 0.9
+    config.ADAM_BETA_1 = 0 if config.training_type == 'progressive' else 0.9
     if not(config.disc_model == 'progan_adapted' or config.disc_model == 'dcgan' or config.disc_model == 'progan'):
         raise utils.LossCompatibilityError(config.loss_type, config.disc_model)
 else:
@@ -139,12 +148,13 @@ experiment_folder += '/'
 dataset_folder = 'C:/Users/T-Gamer/OneDrive/Vinicius/01-Estudos/00_Datasets/celeba_hq/'
 # dataset_folder = 'C:/Users/Vinícius/OneDrive/Vinicius/01-Estudos/00_Datasets/celeba_hq/'
 
-train_folder = dataset_folder+'train/'
-test_folder = dataset_folder+'val/'
+train_folder = dataset_folder + 'train/'
+test_folder = dataset_folder + 'val/'
 
-full_dataset_string = dataset_folder+'*/*/*.jpg'
-train_dataset_string = train_folder+'*/*.jpg'
-test_dataset_string = test_folder+'*/*.jpg'
+full_dataset_string = dataset_folder + '*/*/*.jpg'
+train_dataset_string = train_folder + '*/*.jpg'
+test_dataset_string = test_folder + '*/*.jpg'
+dataset_string = full_dataset_string
 
 ### Pastas dos resultados
 result_folder = experiment_folder + 'results/'
@@ -162,16 +172,21 @@ if not os.path.exists(result_folder):
     
 if not os.path.exists(model_folder):
     os.mkdir(model_folder)
-    
-### Pasta do checkpoint
+
+#%% CONTROLE DO CHECKPOINT
+
+# Pasta do checkpoint
 checkpoint_dir = experiment_folder + 'checkpoints'
 checkpoint_prefix = os.path.join(checkpoint_dir, "ckpt")
+
+# Definição de época e step para controle no ckeckpoint
+tf_epoch = tf.Variable(0)
+tf_step = tf.Variable(0)
 
 #%% DEFINIÇÃO DAS LOSSES
 
 # Configura o Binary Cross Entropy de acordo com o DISCRIMINATOR_USE_LOGITS
 BCE = tf.keras.losses.BinaryCrossentropy(from_logits = config.DISCRIMINATOR_USE_LOGITS)
-
 
 '''
 PatchGAN: Em vez de o discriminador usar uma única predição (0 = falsa, 1 = real), o discriminador da PatchGAN (Pix2Pix e CycleGAN) usa
@@ -220,26 +235,25 @@ os autores criaram o conceito de Gradient Penalty para manter essa condição de
 def loss_wgangp_generator(disc_fake_output):
     return loss_wgan_generator(disc_fake_output)
 
-def loss_wgangp_discriminator(disc_real_output, disc_fake_output, discriminator, real_img, fake_img, training = 'direct', alpha = 0, step = 0, batch_size = 1):
+"""
+def loss_wgangp_discriminator(disc_real_output, disc_fake_output, discriminator, real_img, fake_img, training = 'direct', alpha = 0, step = 0):
     total_disc_loss, real_loss, fake_loss = loss_wgan_discriminator(disc_real_output, disc_fake_output)
-    gp = gradient_penalty(discriminator, real_img, fake_img, training, alpha, step, batch_size)
+    gp = gradient_penalty(discriminator, real_img, fake_img, training, alpha, step)
     total_disc_loss = total_disc_loss + config.LAMBDA_GP * gp
     return total_disc_loss, real_loss, fake_loss, gp
 
-def gradient_penalty(discriminator, real_img, fake_img, training, alpha, step, batch_size):
+def gradient_penalty(discriminator, real_img, fake_img, training, alpha, step):
     ''' 
     Calculates the gradient penalty.
     This loss is calculated on an interpolated image and added to the discriminator loss.
     From: https://colab.research.google.com/github/keras-team/keras-io/blob/master/examples/generative/ipynb/wgan_gp.ipynb#scrollTo=LhzOUkhYSOPG
     '''
-    # Get the interpolated image
-    if training == 'direct':
-        gamma = tf.random.normal([config.BATCH_SIZE, 1, 1, 1], 0.0, 1.0)
-    elif training == 'progressive':
-        gamma = tf.random.normal([batch_size, 1, 1, 1], 0.0, 1.0)
-    else:
-        return 0
-    
+    # Get the Batch Size
+    batch_size = real_img.shape[0]
+
+    # Calculates gamma
+    gamma = tf.random.normal([batch_size, 1, 1, 1], 0.0, 1.0)
+
     diff = fake_img - real_img
     interpolated = real_img + gamma * diff
 
@@ -258,7 +272,48 @@ def gradient_penalty(discriminator, real_img, fake_img, training, alpha, step, b
     norm = tf.sqrt(tf.reduce_sum(tf.square(grads), axis=[1, 2, 3]))
     gp = tf.reduce_mean((norm - 1.0) ** 2)
     return gp
+"""
 
+# Acertada para condizer com o tutorial do Aladdin Persson
+# https://www.youtube.com/watch?v=nkQHASviYac
+def loss_wgangp_discriminator(disc_real_output, disc_fake_output, discriminator, real_img, fake_img, training = 'direct', alpha = 0, step = 0):
+    real_loss = tf.reduce_mean(disc_real_output)
+    fake_loss = tf.reduce_mean(disc_fake_output)
+    gp = gradient_penalty(discriminator, real_img, fake_img, training, alpha, step)
+    total_disc_loss = -(real_loss - fake_loss) + config.LAMBDA_GP * gp + (0.001 * tf.reduce_mean(disc_real_output**2))
+    return total_disc_loss, real_loss, fake_loss, gp
+
+def gradient_penalty(discriminator, real_img, fake_img, training, alpha, step):
+    ''' 
+    Calculates the gradient penalty.
+    This loss is calculated on an interpolated image and added to the discriminator loss.
+    From: https://colab.research.google.com/github/keras-team/keras-io/blob/master/examples/generative/ipynb/wgan_gp.ipynb#scrollTo=LhzOUkhYSOPG
+    '''
+    # Get the Batch Size
+    batch_size = real_img.shape[0]
+
+    # Calcula gamma
+    gamma = tf.random.uniform([batch_size, 1, 1, 1])
+
+    # Calcula a imagem interpolada
+    interpolated = real_img * gamma + fake_img * (1 - gamma)
+
+    with tf.GradientTape() as gp_tape:
+
+        gp_tape.watch(interpolated)
+
+        # 1. Get the discriminator output for this interpolated image.
+        if training == 'direct':
+            pred = discriminator(interpolated, training=True) # O discriminador usa duas imagens como entrada
+        elif training == 'progressive':
+            pred = discriminator(interpolated, alpha, step)
+
+    # 2. Calculate the gradients w.r.t to this interpolated image.
+    grads = gp_tape.gradient(pred, [interpolated])[0]
+    # 3. Calculate the norm of the gradients.
+    norm = tf.sqrt(tf.reduce_sum(tf.square(grads), axis=[1, 2, 3]))
+    gp = tf.reduce_mean((norm - 1.0) ** 2)
+    return gp
 
 #%% FUNÇÕES DO TREINAMENTO
 
@@ -275,7 +330,7 @@ def train_step_direct(generator, discriminator, real_image, input_vector):
         disc_real = discriminator(real_image, training=True)
         disc_fake = discriminator(fake_image, training=True)
 
-        if config.loss_type == 'patchganloss':
+        if config.loss_type == 'ganloss':
             gen_loss = loss_patchgan_generator(disc_fake)
             disc_loss, disc_real_loss, disc_fake_loss = loss_patchgan_discriminator(disc_real, disc_fake)
             gp = 0
@@ -303,10 +358,12 @@ def train_step_direct(generator, discriminator, real_image, input_vector):
     
     return (gen_loss, disc_loss, disc_real_loss, disc_fake_loss, gp)
 
-def fit_direct(generator, discriminator, first_epoch, epochs):
+def fit_direct(generator, discriminator, tf_epoch, epochs):
+
+    first_epoch = tf_epoch.numpy()
 
     # Prepara o dataset de treino
-    train_ds, config.TRAIN_SIZE = utils.prepare_dataset(full_dataset_string, config.IMG_SIZE, config.BATCH_SIZE, config.BUFFER_SIZE)
+    train_ds, config.TRAIN_SIZE = utils.prepare_dataset(dataset_string, config.IMG_SIZE, config.BATCH_SIZE, config.BUFFER_SIZE)
     print("O dataset de treino tem {} imagens".format(config.TRAIN_SIZE))
     
     # Lê arquivo com as losses
@@ -338,7 +395,7 @@ def fit_direct(generator, discriminator, first_epoch, epochs):
         plt.close(fig)
 
     ########## LOOP DE TREINAMENTO ##########
-    for epoch in range(first_epoch, epochs+1):
+    for epoch in range(first_epoch, epochs):
         t_start = time.time()
         
         print(utils.get_time_string(), " - Época: ", epoch)
@@ -368,11 +425,14 @@ def fit_direct(generator, discriminator, first_epoch, epochs):
             # Log as métricas no wandb 
             wandb.log({ 'gen_loss': gen_loss.numpy(), 'disc_loss': disc_loss.numpy(), 'disc_real_loss': disc_real_loss.numpy(),
                         'disc_fake_loss': disc_fake_loss.numpy(), 'gradient_penalty': gp.numpy(), 'accuracy': acc})            
-            
+        
+        # Atualiza o tracker de época
+        tf_epoch.assign_add(1)
+
         # Salva o checkpoint
         if config.SAVE_CHECKPOINT and ((epoch) % config.CHECKPOINT_EPOCHS == 0):
             ckpt_manager.save()
-            print("\nSalvando checkpoint...")
+            print("\nSalvando checkpoint...")        
 
         # Mostra o andamento do treinamento com uma imagem sintética do fixed noise
         filename = "epoca_" + str(epoch).zfill(len(str(config.EPOCHS))) + ".jpg"
@@ -399,7 +459,7 @@ def fit_direct(generator, discriminator, first_epoch, epochs):
 FUNÇÕES DE TREINAMENTO PROGRESSIVO
 '''
 
-def train_step_progressive(generator, discriminator, real_image, input_vector, alpha, step, batch_size):
+def train_step_progressive(generator, discriminator, real_image, input_vector, alpha, step):
     with tf.GradientTape() as gen_tape, tf.GradientTape() as disc_tape:
 
         # Gera a imagem e faz as discriminações
@@ -407,7 +467,7 @@ def train_step_progressive(generator, discriminator, real_image, input_vector, a
         disc_real = discriminator(real_image, alpha, step)
         disc_fake = discriminator(fake_image, alpha, step)
 
-        if config.loss_type == 'patchganloss':
+        if config.loss_type == 'ganloss':
             gen_loss = loss_patchgan_generator(disc_fake)
             disc_loss, disc_real_loss, disc_fake_loss = loss_patchgan_discriminator(disc_real, disc_fake)
             gp = 0
@@ -420,8 +480,7 @@ def train_step_progressive(generator, discriminator, real_image, input_vector, a
         elif config.loss_type == 'wgan-gp':
             gen_loss = loss_wgangp_generator(disc_fake)
             disc_loss, disc_real_loss, disc_fake_loss, gp = loss_wgangp_discriminator(disc_real,
-                    disc_fake, discriminator, real_image, fake_image, 'progressive', alpha, step, batch_size)
-
+                    disc_fake, discriminator, real_image, fake_image, 'progressive', alpha, step)
 
         # Incluído o else para não dar erro 'gen_loss' is used before assignment
         else:
@@ -437,8 +496,12 @@ def train_step_progressive(generator, discriminator, real_image, input_vector, a
     
     return (gen_loss, disc_loss, disc_real_loss, disc_fake_loss, gp)
 
-def fit_progressive(generator, discriminator):
+def fit_progressive(generator, discriminator, tf_epoch, tf_step):
     
+    # Recupera o step e a época atual
+    first_step = tf_step.numpy()
+    first_epoch = tf_epoch.numpy()
+
     # Lê arquivo com as losses
     try: 
         loss_df = pd.read_csv(experiment_folder + "losses.csv")
@@ -454,41 +517,46 @@ def fit_progressive(generator, discriminator):
     utils.print_fixed_noise(fixed_noise, result_folder, "Ruído Fixo")
 
     # Mostra como está a geração pelo fixed_noise antes do treinamento
-    filename = "Estado_Inicial.jpg"
-    fig = utils.print_generated_images_prog(generator, fixed_noise, 1, 0, result_folder, filename)
+    if first_step == 0 and first_epoch == 0:
+        filename = "Estado_Inicial.jpg"
+        fig = utils.print_generated_images_prog(generator, fixed_noise, 1, 0, result_folder, filename)
 
-    # Loga a figura no wandb
-    s = "Estado Inicial"
-    wandbfig = wandb.Image(fig, caption="estado_inicial")
-    wandb.log({s: wandbfig})
+        # Loga a figura no wandb
+        s = "Estado Inicial"
+        wandbfig = wandb.Image(fig, caption="estado_inicial")
+        wandb.log({s: wandbfig})
 
-    if config.QUIET_PLOT:
-        plt.close(fig)
+        if config.QUIET_PLOT:
+            plt.close(fig)
 
     ########## LOOP DE TREINAMENTO ##########
     t_start_step = time.time()
-    for step in range(config.STEPS + 1):
+    for step in range(first_step, config.STEPS + 1):
         curr_img_size = 4*(2**step)
         curr_batch_size = config.BATCH_SIZES[step]
         print(utils.get_time_string(), f" - Passo {step}: Imagem {curr_img_size}x{curr_img_size}")
 
         # Define o dataset usado neste step
-        train_ds, config.TRAIN_SIZE = utils.prepare_dataset(full_dataset_string, curr_img_size, curr_batch_size, config.BUFFER_SIZE)
+        train_ds, config.TRAIN_SIZE = utils.prepare_dataset(dataset_string, curr_img_size, curr_batch_size, 
+                                      config.BUFFER_SIZE, use_jitter = config.USE_RANDOM_JITTER, use_cache = config.CACHE_DATASET)
         # print("O dataset de treino tem {} imagens".format(config.TRAIN_SIZE))
 
         # Prepara a progression bar
-        progbar = tf.keras.utils.Progbar(int(ceil(config.TRAIN_SIZE / curr_batch_size)))
+        total_iterations = int(ceil(config.TRAIN_SIZE / curr_batch_size))
+        progbar = tf.keras.utils.Progbar(total_iterations)
 
-        for epoch in range(config.EPOCHS_FADE_IN + config.EPOCHS_NORMAL):
+        for epoch in range(first_epoch, config.EPOCHS_FADE_IN + config.EPOCHS_NORMAL):
             t_start = time.time()
             print(utils.get_time_string(), " - Época: ", epoch)
 
             # Define o alpha
             if epoch < config.EPOCHS_FADE_IN:
-                alpha = (epoch + 1)/(config.EPOCHS_FADE_IN + 1)
-            else: 
-                alpha = 1
-            print("Alpha: ", alpha)
+                alpha_min = (epoch)/(config.EPOCHS_FADE_IN)
+                alpha_max = (epoch+1)/(config.EPOCHS_FADE_IN)
+            else:
+                alpha_min = 1
+                alpha_max = 1
+            print(f"Alpha: {alpha_min:.2f} - {alpha_max:.2f}")
 
             # Train
             i = 0 # Para o progress bar
@@ -498,27 +566,23 @@ def fit_progressive(generator, discriminator):
                 i += 1
                 progbar.update(i)
 
+                # Define o alpha
+                if epoch < config.EPOCHS_FADE_IN:
+                    inc = i / total_iterations
+                    alpha = alpha_min + inc * (alpha_max - alpha_min)
+                else: 
+                    alpha = 1
+
                 # Gera o vetor de ruído aleatório
-                noise = tf.random.normal(shape = [curr_batch_size, config.VEC_SIZE])
-                
-                """
-                # Teste do modelo
-                print("")
-                fake_image = generator(noise, alpha = alpha, steps = step)
-                print("Tamanho da imagem final: ", fake_image.shape)
-                disc_fake = discriminator(fake_image, alpha = alpha, steps = step)
-                print("Discriminação imagem fake: ", disc_fake.shape)
-                disc_real = discriminator(real_image, alpha = alpha, steps = step)
-                print("Discriminação imagem real: ", disc_real.shape)
-                """
+                noise = tf.random.normal(shape = [real_image.shape[0], config.VEC_SIZE])
 
                 # Step de treinamento
-                gen_loss, disc_loss, disc_real_loss, disc_fake_loss, gp = train_step_progressive(generator, discriminator, real_image, 
-                                                                          noise, alpha, step, curr_batch_size)
+                gen_loss, disc_loss, disc_real_loss, disc_fake_loss, gp = train_step_progressive(generator, discriminator, 
+                                                                          real_image, noise, alpha, step)
 
                 # Calcula a acurácia:
                 if config.EVALUATE_ACCURACY:
-                    y_real, y_pred, acc = utils.evaluate_accuracy(generator, discriminator, real_image, noise, y_real, y_pred)
+                    y_real, y_pred, acc = utils.evaluate_accuracy(generator, discriminator, real_image, noise, y_real, y_pred, training = 'progressive', alpha = alpha, step = step)
                 else:
                     acc = 0
 
@@ -530,12 +594,7 @@ def fit_progressive(generator, discriminator):
                 wandb.log({ 'gen_loss': gen_loss.numpy(), 'disc_loss': disc_loss.numpy(), 'disc_real_loss': disc_real_loss.numpy(),
                             'disc_fake_loss': disc_fake_loss.numpy(), 'gradient_penalty': gp, 'accuracy': acc, 
                             'alpha': alpha, 'step': step})            
-                
-            # Salva o checkpoint
-            # if config.SAVE_CHECKPOINT and ((epoch) % config.CHECKPOINT_EPOCHS == 0):
-            #     ckpt_manager.save()
-            #     print("\nSalvando checkpoint...")
-
+            
             # Mostra o andamento do treinamento com uma imagem sintética do fixed noise
             filename = "passo_" + str(step).zfill(len(str(config.STEPS)))
             filename += "_epoca_" + str(epoch).zfill(len(str(config.EPOCHS))) + ".jpg"
@@ -556,6 +615,26 @@ def fit_progressive(generator, discriminator):
             dt = time.time() - t_start
             print ('Tempo usado para a época {} foi de {:.2f} min ({:.2f} sec)\n'.format(epoch, dt/60, dt))
             wandb.log({'epoch time (s)': dt, 'epoch time (min)': dt/60})
+
+            # Atualiza o tracker de época
+            tf_epoch.assign_add(1)
+
+            # Salva o checkpoint
+            if config.SAVE_CHECKPOINT and ((epoch) % config.CHECKPOINT_EPOCHS == 0):
+                ckpt_manager.save()
+                print("Salvando checkpoint...\n")
+
+        # Atualiza o tracker de step
+        tf_step.assign_add(1)
+
+        # Reseta o tracker de época
+        tf_epoch.assign(0)
+        first_epoch = 0
+
+        # Salva o checkpoint
+        if config.SAVE_CHECKPOINT and ((epoch) % config.CHECKPOINT_EPOCHS == 0):
+            ckpt_manager.save()
+            print("Salvando checkpoint...\n")
 
 #%% TESTA O CÓDIGO E MOSTRA UMA IMAGEM DO DATASET
 
@@ -605,25 +684,30 @@ discriminator_optimizer = tf.keras.optimizers.Adam(config.LEARNING_RATE_D, beta_
 #%% EXECUÇÃO
 
 # Prepara o checkpoint 
-checkpoint = tf.train.Checkpoint(generator_optimizer = generator_optimizer,
-                                discriminator_optimizer = discriminator_optimizer,
-                                generator = generator,
-                                disc = discriminator)
+if config.training_type == 'progressive':
+    checkpoint = tf.train.Checkpoint(generator_optimizer = generator_optimizer,
+                                    discriminator_optimizer = discriminator_optimizer,
+                                    generator = generator,
+                                    disc = discriminator,
+                                    tf_epoch = tf_epoch,
+                                    tf_step = tf_step)
+else:
+    checkpoint = tf.train.Checkpoint(generator_optimizer = generator_optimizer,
+                                    discriminator_optimizer = discriminator_optimizer,
+                                    generator = generator,
+                                    disc = discriminator,
+                                    tf_epoch = tf_epoch)
 
 ckpt_manager = tf.train.CheckpointManager(checkpoint, checkpoint_dir, max_to_keep = config.KEEP_CHECKPOINTS)
 
-# Se for o caso, recupera o checkpoint mais recente
+# Se for carregar o checkpoint mais recente
 if config.LOAD_CHECKPOINT:
-    latest_checkpoint = tf.train.latest_checkpoint(checkpoint_dir)
-    if latest_checkpoint != None:
-        print("Carregando checkpoint mais recente...")
-        checkpoint.restore(latest_checkpoint)
-        config.FIRST_EPOCH = int(latest_checkpoint.split("-")[1]) + 1
-    else:
-        config.FIRST_EPOCH = 1
-else:
-    config.FIRST_EPOCH = 1
-        
+    print("Carregando checkpoint mais recente, se houver...")
+    restore = ckpt_manager.restore_or_initialize()
+    if restore != None:
+        print(f"Carregado - Passo {tf_step.numpy()} e Época {tf_epoch.numpy()}")
+    print("")
+
 # Salva os modelos (principalmente para visualização)
 if config.SAVE_MODELS:
     generator.save(model_folder+'ae_generator.h5')
@@ -631,15 +715,22 @@ if config.SAVE_MODELS:
 
 #%% TREINAMENTO
 
-if config.FIRST_EPOCH <= config.EPOCHS:
-    # Treinamento direto
-    if config.training_type == 'direct':
-        fit_direct(generator, discriminator, config.FIRST_EPOCH, config.EPOCHS)
-    # Treinamento progressivo
-    elif config.training_type == 'progressive':
-        fit_progressive(generator, discriminator)
+# Treinamento direto
+if config.training_type == 'direct':
+    if (tf_epoch.numpy() <= (config.EPOCHS)):
+        fit_direct(generator, discriminator, tf_epoch, config.EPOCHS)
     else:
-        raise utils.TrainingTypeError(config.training_type)
+        ckpt_manager.save()
+
+# Treinamento progressivo
+elif config.training_type == 'progressive':
+    if (tf_step.numpy() <= config.STEPS):
+        fit_progressive(generator, discriminator, tf_epoch, tf_step)
+    else:
+        ckpt_manager.save()
+
+else:
+    raise utils.TrainingTypeError(config.training_type)
 
 
 #%% VALIDAÇÃO
@@ -651,13 +742,3 @@ wandb.finish()
 if config.SAVE_MODELS:
     generator.save(model_folder+'ae_generator.h5')
     discriminator.save(model_folder+'ae_discriminator.h5')
-
-## Plota as losses
-try: 
-    loss_df = pd.read_csv(experiment_folder + "losses.csv")
-    fig = utils.plot_losses(loss_df)
-
-    if config.QUIET_PLOT:
-        plt.close(fig)
-except:
-    None

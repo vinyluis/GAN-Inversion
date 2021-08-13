@@ -54,7 +54,7 @@ def print_generated_images(generator, inp, save_destination = None, filename = N
     
     # Gera um batch de imagens
     gen_img_batch = generator(inp, training=True)
-    f = plt.figure(figsize=(15,15))
+    f = plt.figure(figsize=(10,10))
 
     # Define quantas imagens serão plotadas no máximo
     max_plots = 16
@@ -81,7 +81,7 @@ def print_generated_images_prog(generator, inp, alpha, step, save_destination = 
     
     # Gera um batch de imagens
     gen_img_batch = generator(inp, alpha, step)
-    f = plt.figure(figsize=(15,15))
+    f = plt.figure(figsize=(10, 10))
 
     # Define quantas imagens serão plotadas no máximo
     max_plots = 16
@@ -127,15 +127,24 @@ def plot_losses(loss_df, plot_ma = True, window = 100):
     
     return f
 
-def evaluate_accuracy(generator, discriminator, real_image, input_vector, y_real, y_pred, window = 100):
+def evaluate_accuracy(generator, discriminator, real_image, input_vector, y_real, y_pred, window = 100, training = 'direct', alpha = 1, step = 0):
     
-    # Cria a imagem fake
-    fake_image = generator(input_vector, training = True)
+    if training == 'direct':
+        # Cria a imagem fake
+        fake_image = generator(input_vector, training = True)
 
-    # Avalia ambas
-    disc_real = discriminator(real_image, training = True)
-    disc_fake = discriminator(fake_image, training = True)
+        # Avalia ambas
+        disc_real = discriminator(real_image, training = True)
+        disc_fake = discriminator(fake_image, training = True)
 
+    elif training == 'progressive':
+        # Cria a imagem fake
+        fake_image = generator(input_vector, alpha, step)
+
+        # Avalia ambas
+        disc_real = discriminator(real_image, alpha, step)
+        disc_fake = discriminator(fake_image, alpha, step)
+        
     # Para o caso de ser um discriminador PatchGAN, tira a média
     disc_real = np.mean(disc_real)
     disc_fake = np.mean(disc_fake)
@@ -162,7 +171,7 @@ def evaluate_accuracy(generator, discriminator, real_image, input_vector, y_real
 
 def print_fixed_noise(noise, save_destination = None, filename = None):
     
-    f = plt.figure(figsize=(10,3))
+    f = plt.figure(figsize=(7,3))
 
     # Define o título
     title = ['Ruído Fixo']
@@ -173,7 +182,6 @@ def print_fixed_noise(noise, save_destination = None, filename = None):
         f.savefig(save_destination + filename)
 
     return f
-
 
 def random_print_prog(generator, step, vec_size, save_destination = None, filename = None):
     
@@ -226,16 +234,21 @@ def random_jitter(input_image, img_size):
     
     return input_image
 
-def load_image_train(image_file, img_size):
+def load_image_train(image_file, img_size, use_jitter = True):
     input_image = load(image_file)    
-    input_image = random_jitter(input_image, img_size)
+    if use_jitter:
+        input_image = random_jitter(input_image, img_size)
+    else:
+        input_image = resize(input_image, img_size, img_size)
     input_image = normalize(input_image)
     return input_image
 
-def prepare_dataset(files_string, image_size, batch_size, buffer_size = None):
+def prepare_dataset(files_string, image_size, batch_size, buffer_size = None, use_jitter = True, use_cache = False):
     dataset = tf.data.Dataset.list_files(files_string) # Pega o dataset inteiro para treino
     dataset_size = len(list(dataset))
-    dataset = dataset.map(lambda x: load_image_train(x, image_size))
+    dataset = dataset.map(lambda x: load_image_train(x, image_size, use_jitter))
+    if use_cache:
+        dataset = dataset.cache()
     dataset = dataset.shuffle(buffer_size) if buffer_size != None else dataset
     dataset = dataset.batch(batch_size)
     return dataset, dataset_size
