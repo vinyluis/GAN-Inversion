@@ -105,28 +105,6 @@ def print_generated_images_prog(generator, inp, alpha, step, save_destination = 
 
     return f
 
-def plot_losses(loss_df, plot_ma = True, window = 100):
-    
-    # Plota o principal
-    f = plt.figure()
-    sns.lineplot(x = range(loss_df.shape[0]), y = loss_df["Loss G"])
-    sns.lineplot(x = range(loss_df.shape[0]), y = loss_df["Loss D"])
-    
-    # Plota as médias móveis
-    if plot_ma:
-        
-        lossG_ma = loss_df["Loss G"].rolling(window = window, min_periods = 1).mean()
-        lossD_ma = loss_df["Loss D"].rolling(window = window, min_periods = 1).mean()
-        sns.lineplot(x = range(loss_df.shape[0]), y = lossG_ma)
-        sns.lineplot(x = range(loss_df.shape[0]), y = lossD_ma)
-        plt.legend(["Loss G", "Loss D", "Loss G - MA", "Loss D - MA"])
-    else:
-        plt.legend(["Loss G", "Loss D"])
-    
-    f.show()
-    
-    return f
-
 def evaluate_accuracy(generator, discriminator, real_image, input_vector, y_real, y_pred, window = 100, training = 'direct', alpha = 1, step = 0):
     
     if training == 'direct':
@@ -252,6 +230,7 @@ def prepare_dataset(files_string, image_size, batch_size, buffer_size = None, us
     dataset = dataset.shuffle(buffer_size) if buffer_size != None else dataset
     dataset = dataset.batch(batch_size)
     return dataset, dataset_size
+
 
 #%% TRATAMENTO DE EXCEÇÕES
     

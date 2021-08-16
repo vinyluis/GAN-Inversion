@@ -5,7 +5,6 @@ import os
 import time
 from math import ceil, log2
 
-import pandas as pd
 from matplotlib import pyplot as plt
 import wandb
 
@@ -18,24 +17,14 @@ import utils
 
 #%% Weights & Biases
 
-wandb.init(project='gan_inversion', entity='vinyluis', mode="disabled")
-# wandb.init(project='gan_inversion', entity='vinyluis', mode="online")
-# wandb.init(project='gan_inversion', entity='vinyluis', mode="online", resume="")
+# wandb.init(project='gan_inversion', entity='vinyluis', mode="disabled")
+wandb.init(project='gan_inversion', entity='vinyluis', mode="online")
+# wandb.init(project='gan_inversion', entity='vinyluis', mode="online", resume="1jx53k66")
 
 #%% Config Tensorflow
-
-# Evita o erro "Failed to get convolution algorithm. This is probably because cuDNN failed to initialize"
-# tfconfig = tf.compat.v1.ConfigProto()
-# tfconfig.gpu_options.allow_growth = True
-# session = tf.compat.v1.InteractiveSession(config=tfconfig)
-
 # Verifica se a GPU está disponível:
 print("---- VERIFICA SE A GPU ESTÁ DISPONÍVEL:")
 print(tf.config.list_physical_devices('GPU'))
-# Verifica se a GPU está sendo usada na sessão
-# print("---- VERIFICA SE A GPU ESTÁ SENDO USADA NA SESSÃO:")
-# sess = tf.compat.v1.Session(config=tf.compat.v1.ConfigProto(log_device_placement=True))
-# print(sess)
 print("")
 
 
@@ -55,21 +44,21 @@ config.EPOCHS = 3
 config.LAMBDA_GP = 10 # Intensidade do Gradient Penalty da WGAN-GP
 config.CACHE_DATASET = True
 config.USE_RANDOM_JITTER = False
-# config.ADAM_BETA_1 = 0.5 #0.5 para a PatchGAN e 0.9 para a WGAN - Definido no código
+config.DATASET = "InsetosFlickr" # "CelebaHQ" ou "InsetosFlickr"
 
 # Parâmetros de modelo
 config.DISENTANGLEMENT = False
 config.VEC_SIZE = 256
 config.EVALUATE_ACCURACY = False
 config.DISCRIMINATOR_USE_LOGITS = True
-config.IMG_SIZE = 64 # Tamanho da imagem no treinamento direto, ou tamanho máximo no caso do treinamento progressivo
+config.IMG_SIZE = 128 # Tamanho da imagem no treinamento direto, ou tamanho máximo no caso do treinamento progressivo
 # config.update({"IMG_SIZE" : 64}, allow_val_change = True)
 
 # Específico do treinamento progressivo
-config.BATCH_SIZES = [64, 32, 32, 16, 4, 4, 2, 2, 1]
-# config.update({"BATCH_SIZES" : [64, 32, 32, 16, 4, 4, 2, 2, 1]}, allow_val_change = True)
+config.BATCH_SIZES = [128, 64, 32, 16, 8, 4, 2, 2, 1]
+# config.update({"BATCH_SIZES" : [[128, 64, 32, 16, 8, 4, 2, 2, 1]}, allow_val_change = True)
 config.EPOCHS_FADE_IN = 10 # Quantas épocas por "step" de crescimento faremos o fade-in (variação do alpha)
-config.EPOCHS_NORMAL = 10 # Quantas épocas por "step" de crescimento após o final do fade-in
+config.EPOCHS_NORMAL = 20 # Quantas épocas por "step" de crescimento após o final do fade-in
 config.CHANNELS = 256 # Quantidade máxima de canais para o treinamento progressivo
 config.STEPS = int(log2(config.IMG_SIZE / 4)) # Quantidade de "steps" até chegar em IMG_SIZE
 # config.update({"STEPS" : int(log2(config.IMG_SIZE / 4))}, allow_val_change = True)
@@ -91,7 +80,7 @@ wandb.config.update(config, allow_val_change = True)
 #%% CONTROLE DA ARQUITETURA
 
 # Código do experimento (se não houver, deixar "")
-config.exp = "05F"
+config.exp = '05I'
 
 # Modelo do gerador. Possíveis direto = 'dcgan', 'pix2pix_adapted', 'resnet_decoder', 'simple_decoder'
 # Possíveis com treinamento progressivo = 'progan'
@@ -145,16 +134,22 @@ experiment_folder += config.training_type
 experiment_folder += '/'
 
 ### Pastas do dataset
-dataset_folder = 'C:/Users/T-Gamer/OneDrive/Vinicius/01-Estudos/00_Datasets/celeba_hq/'
-# dataset_folder = 'C:/Users/Vinícius/OneDrive/Vinicius/01-Estudos/00_Datasets/celeba_hq/'
+if config.DATASET == 'CelebaHQ':
+    dataset_folder = 'C:/Users/T-Gamer/OneDrive/Vinicius/01-Estudos/00_Datasets/celeba_hq/'
+    # dataset_folder = 'C:/Users/Vinícius/OneDrive/Vinicius/01-Estudos/00_Datasets/celeba_hq/'
 
-train_folder = dataset_folder + 'train/'
-test_folder = dataset_folder + 'val/'
+    train_folder = dataset_folder + 'train/'
+    test_folder = dataset_folder + 'val/'
 
-full_dataset_string = dataset_folder + '*/*/*.jpg'
-train_dataset_string = train_folder + '*/*.jpg'
-test_dataset_string = test_folder + '*/*.jpg'
-dataset_string = full_dataset_string
+    full_dataset_string = dataset_folder + '*/*/*.jpg'
+    train_dataset_string = train_folder + '*/*.jpg'
+    test_dataset_string = test_folder + '*/*.jpg'
+    dataset_string = full_dataset_string
+
+if config.DATASET == 'InsetosFlickr':
+    dataset_folder = "C:/Users/T-Gamer/OneDrive/Vinicius/01-Estudos/00_Datasets/flickr_internetarchivebookimages_prepared"
+    full_dataset_string = dataset_folder + '*/*/*.jpg'
+    dataset_string = full_dataset_string
 
 ### Pastas dos resultados
 result_folder = experiment_folder + 'results/'
@@ -366,12 +361,6 @@ def fit_direct(generator, discriminator, tf_epoch, epochs):
     train_ds, config.TRAIN_SIZE = utils.prepare_dataset(dataset_string, config.IMG_SIZE, config.BATCH_SIZE, config.BUFFER_SIZE)
     print("O dataset de treino tem {} imagens".format(config.TRAIN_SIZE))
     
-    # Lê arquivo com as losses
-    try: 
-        loss_df = pd.read_csv(experiment_folder + "losses.csv")
-    except:
-        loss_df = pd.DataFrame(columns = ["Loss G", "Loss D"])
-    
     # Listas para o cálculo da acurácia do discriminador
     y_real = []
     y_pred = []
@@ -420,8 +409,6 @@ def fit_direct(generator, discriminator, tf_epoch, epochs):
             else:
                 acc = 0
 
-            # Acrescenta a loss no arquivo
-            loss_df = loss_df.append({"Loss G": gen_loss.numpy(), "Loss D" : disc_loss.numpy()}, ignore_index = True)
             # Log as métricas no wandb 
             wandb.log({ 'gen_loss': gen_loss.numpy(), 'disc_loss': disc_loss.numpy(), 'disc_real_loss': disc_real_loss.numpy(),
                         'disc_fake_loss': disc_fake_loss.numpy(), 'gradient_penalty': gp.numpy(), 'accuracy': acc})            
@@ -444,11 +431,6 @@ def fit_direct(generator, discriminator, tf_epoch, epochs):
         # Fecha a figura, se necessário
         if config.QUIET_PLOT:
             plt.close(fig)
-            
-        # Salva o arquivo de losses a cada época e plota como está ficando
-        loss_df.to_csv(experiment_folder + "losses.csv")
-        if not config.QUIET_PLOT:
-            utils.plot_losses(loss_df)
         
         dt = time.time() - t_start
         print ('Tempo usado para a época {} foi de {:.2f} min ({:.2f} sec)\n'.format(epoch, dt/60, dt))
@@ -501,12 +483,6 @@ def fit_progressive(generator, discriminator, tf_epoch, tf_step):
     # Recupera o step e a época atual
     first_step = tf_step.numpy()
     first_epoch = tf_epoch.numpy()
-
-    # Lê arquivo com as losses
-    try: 
-        loss_df = pd.read_csv(experiment_folder + "losses.csv")
-    except:
-        loss_df = pd.DataFrame(columns = ["Loss G", "Loss D"])
     
     # Listas para o cálculo da acurácia do discriminador
     y_real = []
@@ -586,8 +562,6 @@ def fit_progressive(generator, discriminator, tf_epoch, tf_step):
                 else:
                     acc = 0
 
-                # Acrescenta a loss no arquivo
-                loss_df = loss_df.append({"Loss G": gen_loss.numpy(), "Loss D" : disc_loss.numpy()}, ignore_index = True)
                 # Acerta o GP
                 gp = gp.numpy() if type(gp) != int else gp 
                 # Log as métricas no wandb 
@@ -606,12 +580,8 @@ def fit_progressive(generator, discriminator, tf_epoch, tf_step):
             # Fecha a figura, se necessário
             if config.QUIET_PLOT:
                 plt.close(fig)
-                
-            # Salva o arquivo de losses a cada época e plota como está ficando
-            loss_df.to_csv(experiment_folder + "losses.csv")
-            if not config.QUIET_PLOT:
-                utils.plot_losses(loss_df)
             
+            # Calcula o tempo da época
             dt = time.time() - t_start
             print ('Tempo usado para a época {} foi de {:.2f} min ({:.2f} sec)\n'.format(epoch, dt/60, dt))
             wandb.log({'epoch time (s)': dt, 'epoch time (min)': dt/60})
@@ -638,7 +608,11 @@ def fit_progressive(generator, discriminator, tf_epoch, tf_step):
 
 #%% TESTA O CÓDIGO E MOSTRA UMA IMAGEM DO DATASET
 
-inp = utils.load(train_folder+'/female/000085.jpg')
+if config.DATASET == "CelebaHQ":
+    inp = utils.load(train_folder+'/female/000085.jpg')
+if config.DATASET == "InsetosFlickr":
+    inp = utils.load(dataset_folder+'/trainB/insects_winged_001_d.jpg')
+
 # casting to int for matplotlib to show the image
 if not config.QUIET_PLOT:
     plt.figure()
