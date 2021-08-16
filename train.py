@@ -17,9 +17,9 @@ import utils
 
 #%% Weights & Biases
 
-# wandb.init(project='gan_inversion', entity='vinyluis', mode="disabled")
-wandb.init(project='gan_inversion', entity='vinyluis', mode="online")
-# wandb.init(project='gan_inversion', entity='vinyluis', mode="online", resume="1jx53k66")
+# wandb.init(project='unsupervised-gans', entity='vinyluis', mode="disabled")
+wandb.init(project='unsupervised-gans', entity='vinyluis', mode="online")
+# wandb.init(project='unsupervised-gans', entity='vinyluis', mode="online", resume="1jx53k66")
 
 #%% Config Tensorflow
 # Verifica se a GPU está disponível:
