@@ -16,7 +16,27 @@ initializer = tf.random_normal_initializer()
 
 #%% BLOCOS 
 
-def resnet_block(input_tensor, filters):
+## Básicos
+
+def upsample(x, filters):
+    # Reconstrução da imagem, baseada na Pix2Pix / CycleGAN
+    x = tf.keras.layers.Conv2DTranspose(filters = filters, kernel_size = (3, 3) , strides = (2, 2), padding = "same", kernel_initializer=initializer, use_bias = True)(x)
+    x = norm_layer()(x)
+    x = tf.keras.layers.ReLU()(x)
+    
+    return x
+
+def downsample(x, filters):
+    # Reconstrução da imagem, baseada na Pix2Pix / CycleGAN    
+    x = tf.keras.layers.Conv2D(filters = filters, kernel_size = (3, 3) , strides = (2, 2), padding = "same", kernel_initializer=initializer, use_bias = True)(x)
+    x = norm_layer()(x)
+    x = tf.keras.layers.LeakyReLU(alpha=0.2)(x)
+    
+    return x
+
+## Residuais
+
+def residual_block(input_tensor, filters):
     
     ''' 
     Cria um bloco resnet baseado na Resnet34
@@ -41,8 +61,7 @@ def resnet_block(input_tensor, filters):
     
     return x
 
-
-def resnet_block_transpose(input_tensor, filters):
+def residual_block_transpose(input_tensor, filters):
     
     ''' 
     Cria um bloco resnet baseado na Resnet34, mas invertido (convoluções transpostas)
@@ -67,8 +86,7 @@ def resnet_block_transpose(input_tensor, filters):
     
     return x
 
-
-def resnet_bottleneck_block(input_tensor, filters):
+def residual_bottleneck_block(input_tensor, filters):
     
     ''' 
     Cria um bloco resnet bottleneck, baseado na Resnet50
@@ -98,8 +116,7 @@ def resnet_bottleneck_block(input_tensor, filters):
     
     return x
 
-
-def resnet_downsample_bottleneck_block(input_tensor, filters):
+def residual_downsample_bottleneck_block(input_tensor, filters):
     
     ''' 
     Cria um bloco resnet bottleneck, com redução de dimensão, baseado na Resnet50
@@ -133,32 +150,14 @@ def resnet_downsample_bottleneck_block(input_tensor, filters):
     
     return x
 
-
-def upsample(x, filters):
-    # Reconstrução da imagem, baseada na Pix2Pix / CycleGAN
-    x = tf.keras.layers.Conv2DTranspose(filters = filters, kernel_size = (3, 3) , strides = (2, 2), padding = "same", kernel_initializer=initializer, use_bias = True)(x)
-    x = norm_layer()(x)
-    x = tf.keras.layers.ReLU()(x)
-    
-    return x
-
-
-def downsample(x, filters):
-    # Reconstrução da imagem, baseada na Pix2Pix / CycleGAN    
-    x = tf.keras.layers.Conv2D(filters = filters, kernel_size = (3, 3) , strides = (2, 2), padding = "same", kernel_initializer=initializer, use_bias = True)(x)
-    x = norm_layer()(x)
-    x = tf.keras.layers.LeakyReLU(alpha=0.2)(x)
-    
-    return x
-
+## Simple Decoder
 
 def simple_upsample(x, scale = 2, interpolation = 'bilinear'):
     # Faz um umpsample simplificado, baseado no Progressive Growth of GANs
     x = tf.keras.layers.UpSampling2D(size = (scale, scale), interpolation = interpolation)(x)
     return x
 
-
-def VT_simple_upsample_block(x, filters, scale = 2, kernel_size = (3, 3), interpolation = 'bilinear'):
+def simple_upsample_block(x, filters, scale = 2, kernel_size = (3, 3), interpolation = 'bilinear'):
     
     x = simple_upsample(x, scale = scale, interpolation = interpolation) 
     
@@ -172,12 +171,10 @@ def VT_simple_upsample_block(x, filters, scale = 2, kernel_size = (3, 3), interp
     
     return x
 
-
 def simple_downsample(x, scale = 2):
     # Faz um downsample simplificado, baseado no Progressive Growth of GANs
     x = tf.keras.layers.AveragePooling2D(pool_size = (scale, scale))(x)
     return x
-
 
 #%% BLOCOS DA PROGAN
 
@@ -270,7 +267,6 @@ def dcgan_generator(IMG_SIZE, VEC_SIZE, disentanglement = True):
     # Cria o modelo
     return tf.keras.Model(inputs = inputs, outputs = x)
 
-
 def pix2pix_adapted_decoder(IMG_SIZE, VEC_SIZE, disentanglement = True):
         
     # Inicializa a rede
@@ -317,8 +313,7 @@ def pix2pix_adapted_decoder(IMG_SIZE, VEC_SIZE, disentanglement = True):
     # Cria o modelo
     return tf.keras.Model(inputs = inputs, outputs = x)
 
-
-def VT_resnet_decoder(IMG_SIZE, VEC_SIZE, disentanglement = True):
+def resnet_decoder(IMG_SIZE, VEC_SIZE, disentanglement = True):
     
     # Inicializa a rede
     inputs = tf.keras.layers.Input(shape = [VEC_SIZE])
@@ -360,7 +355,7 @@ def VT_resnet_decoder(IMG_SIZE, VEC_SIZE, disentanglement = True):
     
     # Blocos Resnet
     for i in range(9):
-        x = resnet_block_transpose(x, 256)
+        x = residual_block_transpose(x, 256)
     
     # Reconstrução pós blocos residuais
     
@@ -383,8 +378,7 @@ def VT_resnet_decoder(IMG_SIZE, VEC_SIZE, disentanglement = True):
     # Cria o modelo
     return tf.keras.Model(inputs = inputs, outputs = x)
 
-
-def VT_simple_decoder(IMG_SIZE, VEC_SIZE, disentanglement = True):
+def simple_decoder(IMG_SIZE, VEC_SIZE, disentanglement = True):
 
     '''
     Adaptado com base no gerador Resnet da Pix2Pix
@@ -408,14 +402,14 @@ def VT_simple_decoder(IMG_SIZE, VEC_SIZE, disentanglement = True):
     # Upsamples
     # Todos os upsamples vão ser feitos com o simple_upsample, seguidos de duas convoluções na mesma dimensão
     if IMG_SIZE == 256:
-        x = VT_simple_upsample_block(x, 512, scale = 2, kernel_size = (3, 3), interpolation = 'bilinear') #--- 2, 2, 512
-    x = VT_simple_upsample_block(x, 512, scale = 2, kernel_size = (3, 3), interpolation = 'bilinear') #--- 4, 4, 512 ou 2, 2, 512
-    x = VT_simple_upsample_block(x, 512, scale = 2, kernel_size = (3, 3), interpolation = 'bilinear') #--- 8, 8, 512 ou 4, 4, 512
-    x = VT_simple_upsample_block(x, 512, scale = 2, kernel_size = (3, 3), interpolation = 'bilinear') #--- 16, 16, 512 ou 8, 8, 512
-    x = VT_simple_upsample_block(x, 256, scale = 2, kernel_size = (3, 3), interpolation = 'bilinear') #--- 32, 32, 256 ou 16, 16, 256
-    x = VT_simple_upsample_block(x, 128, scale = 2, kernel_size = (3, 3), interpolation = 'bilinear') #--- 64, 64, 128 ou 32, 32, 128
-    x = VT_simple_upsample_block(x, 64, scale = 2, kernel_size = (3, 3), interpolation = 'bilinear') #--- 128, 128, 64 ou 64, 64, 64
-    x = VT_simple_upsample_block(x, 32, scale = 2, kernel_size = (3, 3), interpolation = 'bilinear') #--- 256, 256, 32 ou 128, 128, 32
+        x = simple_upsample_block(x, 512, scale = 2, kernel_size = (3, 3), interpolation = 'bilinear') #--- 2, 2, 512
+    x = simple_upsample_block(x, 512, scale = 2, kernel_size = (3, 3), interpolation = 'bilinear') #--- 4, 4, 512 ou 2, 2, 512
+    x = simple_upsample_block(x, 512, scale = 2, kernel_size = (3, 3), interpolation = 'bilinear') #--- 8, 8, 512 ou 4, 4, 512
+    x = simple_upsample_block(x, 512, scale = 2, kernel_size = (3, 3), interpolation = 'bilinear') #--- 16, 16, 512 ou 8, 8, 512
+    x = simple_upsample_block(x, 256, scale = 2, kernel_size = (3, 3), interpolation = 'bilinear') #--- 32, 32, 256 ou 16, 16, 256
+    x = simple_upsample_block(x, 128, scale = 2, kernel_size = (3, 3), interpolation = 'bilinear') #--- 64, 64, 128 ou 32, 32, 128
+    x = simple_upsample_block(x, 64, scale = 2, kernel_size = (3, 3), interpolation = 'bilinear') #--- 128, 128, 64 ou 64, 64, 64
+    x = simple_upsample_block(x, 32, scale = 2, kernel_size = (3, 3), interpolation = 'bilinear') #--- 256, 256, 32 ou 128, 128, 32
 
     # Camadas finais
     # x = tf.keras.layers.ZeroPadding2D([[1, 1],[1, 1]])(x)
@@ -425,17 +419,20 @@ def VT_simple_decoder(IMG_SIZE, VEC_SIZE, disentanglement = True):
     # Cria o modelo
     return tf.keras.Model(inputs = inputs, outputs = x)
 
-
 class progan_generator(tf.keras.Model):
 
     def __init__(self, CHANNELS = 512, IMG_CHANNELS = 3, VEC_SIZE = 512, disentanglement = False):
+        # CHANNELS = Quantidade de canais que será usada na construção das primeiras camadas da rede.
+        # IMG_CHANNELS = 3 para RGB e 1 para grayscale 
 
         super(progan_generator, self).__init__()
+        # Define o tipo de normalização e se o gerador usa disentanglement
         self.disentanglement = disentanglement
         self.norm_layer = PixelNorm
 
-        # CHANNELS = Quantidade de canais que será usada na construção das primeiras camadas da rede.
-        # IMG_CHANNELS = 3 para RGB e 1 para grayscale 
+        # Define os estados iniciais de alpha e step
+        self.alpha = 1
+        self.step = 0
 
         ### CRIA OS BLOCOS
 
@@ -473,7 +470,7 @@ class progan_generator(tf.keras.Model):
         return tf.tanh(alpha * generated + (1 - alpha) * upscaled)
 
 
-    def call(self, inputs, alpha, steps):
+    def call(self, inputs):
 
         ### FAZ O "FORWARD PROPAGATION"
         # steps = 0 -> 4x4, steps = 1 -> 8x8, ...
@@ -489,20 +486,20 @@ class progan_generator(tf.keras.Model):
         out = self.initial_block(inputs) # 4x4
 
         # Se for o primeiro bloco, não há mais nada, só transformar para RGB
-        if steps == 0:
+        if self.step == 0:
             # return self.initial_rgb(out)
             return tf.tanh(self.initial_rgb(out))
 
         # Para próximos passos do crescimento:
-        for step in range(steps):
+        for step in range(self.step):
             upscaled = tf.keras.layers.UpSampling2D(size = (2, 2), interpolation = "nearest")(out)
             out = self.prog_blocks[step](upscaled)
 
-        final_upscaled = self.rgb_layers[steps - 1](upscaled)
-        final_out = self.rgb_layers[steps](out)
+        final_upscaled = self.rgb_layers[self.step - 1](upscaled)
+        final_out = self.rgb_layers[self.step](out)
 
         # Retorna o resultado com o fadein
-        return self.fade_in(alpha, final_upscaled, final_out)
+        return self.fade_in(self.alpha, final_upscaled, final_out)
 
 
 #%% DISCRIMINADORES
@@ -531,7 +528,6 @@ def dcgan_discriminator(IMG_SIZE, constrained = False, use_logits = True):
 
     # Cria o modelo
     return tf.keras.Model(inputs = inputs, outputs = x)
-
 
 def patchgan_discriminator(IMG_SIZE, constrained = False, use_logits = True):
     
@@ -568,7 +564,6 @@ def patchgan_discriminator(IMG_SIZE, constrained = False, use_logits = True):
     # print(x.shape)
 
     return tf.keras.Model(inputs = inputs, outputs=x)
-
 
 def progan_adapted_discriminator(IMG_SIZE, constrained = False, use_logits = True):
 
@@ -658,17 +653,20 @@ def progan_adapted_discriminator(IMG_SIZE, constrained = False, use_logits = Tru
     
     return tf.keras.Model(inputs = inputs, outputs = x)
 
-
 class progan_discriminator(tf.keras.Model):
 
     def __init__(self, CHANNELS = 512, IMG_CHANNELS = 3):
-
-        super(progan_discriminator, self).__init__()
-        self.norm_layer = PixelNorm
-        self.leaky = tf.keras.layers.LeakyReLU(0.2)
-
         # CHANNELS = Quantidade de canais que será usada na construção das primeiras camadas da rede.
         # IMG_CHANNELS = 3 para RGB e 1 para grayscale 
+
+        super(progan_discriminator, self).__init__()
+        # Padroniza o LeakyReLU e define se o gerador usa disentanglement
+        self.leaky = tf.keras.layers.LeakyReLU(0.2)
+        self.norm_layer = PixelNorm
+
+        # Define os estados iniciais de alpha e step
+        self.alpha = 1
+        self.step = 0
 
         ### CRIA OS BLOCOS
         # O discriminador é o inverso do gerador
@@ -715,20 +713,20 @@ class progan_discriminator(tf.keras.Model):
         constant_feature_map = constant_feature_map * batch_statistics # Aplica a batch_statistics em todo o feature map
         return tf.concat([x, constant_feature_map], axis = -1)
 
-    def call(self, inputs, alpha, steps):
+    def call(self, inputs):
 
         ### FAZ O "FORWARD PROPAGATION"
         # steps = 0 -> 4x4, steps = 1 -> 8x8, ...
         x = inputs
 
         # Iverte a lógica para que seja possível usar os mesmos passos do gerador
-        cur_step = len(self.prog_blocks) - steps 
+        cur_step = len(self.prog_blocks) - self.step
 
         # Passa pela primeira RGB layer
         out = self.leaky(self.rgb_layers[cur_step](x))
 
-        # Se steps == 0, estamos na situação 4x4 e o único bloco vai ser o final
-        if steps == 0:
+        # Se step == 0, estamos na situação 4x4 e o único bloco vai ser o final
+        if self.step == 0:
             out = self.minibatch_std(out)
             out = self.final_block(out)
             return tf.keras.layers.Flatten()(out)
@@ -741,7 +739,7 @@ class progan_discriminator(tf.keras.Model):
         out = self.avg_pool(self.prog_blocks[cur_step](out)) # O out já passou por um from_rgb
 
         # Fade in
-        out = self.fade_in(alpha, downscaled, out)
+        out = self.fade_in(self.alpha, downscaled, out)
 
         # Crescimento progressivo. Como já fizemos o "curr_step", precisamos fazer os anteriores
         for step in range(cur_step + 1, len(self.prog_blocks)):
@@ -764,8 +762,8 @@ if __name__ == "__main__":
     print("Geradores:")
     print("DCGAN                   ", dcgan_generator(img_size, vec_size).output.shape)
     print("Pix2Pix adapted decoder ", pix2pix_adapted_decoder(img_size, vec_size).output.shape)
-    print("Resnet decoder          ", VT_resnet_decoder(img_size, vec_size).output.shape)
-    print("Simple decoder          ", VT_simple_decoder(img_size, vec_size).output.shape)
+    print("Resnet decoder          ", resnet_decoder(img_size, vec_size).output.shape)
+    print("Simple decoder          ", simple_decoder(img_size, vec_size).output.shape)
     print("")
     print("Discriminadores:")
     print("DCGAN                   ", dcgan_discriminator(img_size).output.shape)
@@ -783,9 +781,11 @@ if __name__ == "__main__":
     disc = progan_discriminator(CHANNELS, 3)
     for img_size in [4, 8, 16, 32, 64, 128, 256, 512, 1024]:
         num_steps = int(log2(img_size / 4))
+        gen.step = num_steps
+        disc.step = num_steps
         inp = tf.random.normal(shape = [1, vec_size])
-        gen_img = gen(inp, alpha = 0.5, steps = num_steps)
+        gen_img = gen(inp)
         assert gen_img.shape == (1, img_size, img_size, 3)
-        out = disc(gen_img, alpha= 0.5, steps = num_steps)
+        out = disc(gen_img)
         assert out.shape == (1, 1)
         print(f"Sucesso com img_size: {img_size}")

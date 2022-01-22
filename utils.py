@@ -11,7 +11,7 @@ from sklearn.metrics import accuracy_score as accuracy
 os.environ['TF_CPP_MIN_LOG_LEVEL'] = '2'
 import tensorflow as tf
 
-# Prepara a string de data e hora conforme necessário
+# FUNÇÕES GERAIS E DE PRINT
 def get_time_string(mode = "complete", days_offset = 0):
     
     #horário atual
@@ -49,7 +49,49 @@ def get_time_string(mode = "complete", days_offset = 0):
     if(mode == "file"):
         st = yr+mt+dy
         return st
+
+def evaluate_accuracy(generator, discriminator, real_image, input_vector, y_real, y_pred, window = 100, training = 'direct'):
     
+    if training == 'direct':
+        # Cria a imagem fake
+        fake_image = generator(input_vector, training = True)
+
+        # Avalia ambas
+        disc_real = discriminator(real_image, training = True)
+        disc_fake = discriminator(fake_image, training = True)
+
+    elif training == 'progressive':
+        # Cria a imagem fake
+        fake_image = generator(input_vector)
+
+        # Avalia ambas
+        disc_real = discriminator(real_image)
+        disc_fake = discriminator(fake_image)
+        
+    # Para o caso de ser um discriminador PatchGAN, tira a média
+    disc_real = np.mean(disc_real)
+    disc_fake = np.mean(disc_fake)
+
+    # Aplica o threshold
+    disc_real = 1 if disc_real > 0.5 else 0
+    disc_fake = 1 if disc_fake > 0.5 else 0
+
+    # Acrescenta a observação real como y_real = 1
+    y_real.append(1)
+    y_pred.append(disc_real)
+
+    # Acrescenta a observação fake como y_real = 0
+    y_real.append(0)
+    y_pred.append(disc_fake)
+    
+    # Calcula a acurácia pela janela
+    if len(y_real) > window:
+        acc = accuracy(y_real[-window:], y_pred[-window:])    
+    else:
+        acc = accuracy(y_real, y_pred)
+
+    return y_real, y_pred, acc
+
 def print_generated_images(generator, inp, save_destination = None, filename = None):
     
     # Gera um batch de imagens
@@ -77,10 +119,10 @@ def print_generated_images(generator, inp, save_destination = None, filename = N
 
     return f
 
-def print_generated_images_prog(generator, inp, alpha, step, save_destination = None, filename = None):
+def print_generated_images_prog(generator, inp, save_destination = None, filename = None):
     
     # Gera um batch de imagens
-    gen_img_batch = generator(inp, alpha, step)
+    gen_img_batch = generator(inp)
     f = plt.figure(figsize=(10, 10))
 
     # Define quantas imagens serão plotadas no máximo
@@ -105,48 +147,6 @@ def print_generated_images_prog(generator, inp, alpha, step, save_destination = 
 
     return f
 
-def evaluate_accuracy(generator, discriminator, real_image, input_vector, y_real, y_pred, window = 100, training = 'direct', alpha = 1, step = 0):
-    
-    if training == 'direct':
-        # Cria a imagem fake
-        fake_image = generator(input_vector, training = True)
-
-        # Avalia ambas
-        disc_real = discriminator(real_image, training = True)
-        disc_fake = discriminator(fake_image, training = True)
-
-    elif training == 'progressive':
-        # Cria a imagem fake
-        fake_image = generator(input_vector, alpha, step)
-
-        # Avalia ambas
-        disc_real = discriminator(real_image, alpha, step)
-        disc_fake = discriminator(fake_image, alpha, step)
-        
-    # Para o caso de ser um discriminador PatchGAN, tira a média
-    disc_real = np.mean(disc_real)
-    disc_fake = np.mean(disc_fake)
-
-    # Aplica o threshold
-    disc_real = 1 if disc_real > 0.5 else 0
-    disc_fake = 1 if disc_fake > 0.5 else 0
-
-    # Acrescenta a observação real como y_real = 1
-    y_real.append(1)
-    y_pred.append(disc_real)
-
-    # Acrescenta a observação fake como y_real = 0
-    y_real.append(0)
-    y_pred.append(disc_fake)
-    
-    # Calcula a acurácia pela janela
-    if len(y_real) > window:
-        acc = accuracy(y_real[-window:], y_pred[-window:])    
-    else:
-        acc = accuracy(y_real, y_pred)
-
-    return y_real, y_pred, acc
-
 def print_fixed_noise(noise, save_destination = None, filename = None):
     
     f = plt.figure(figsize=(7,3))
@@ -161,13 +161,13 @@ def print_fixed_noise(noise, save_destination = None, filename = None):
 
     return f
 
-def random_print_prog(generator, step, vec_size, save_destination = None, filename = None):
+def random_print_prog(generator, vec_size, save_destination = None, filename = None):
     
     # Gera um vetor de ruído
     noise = tf.random.normal(shape = (1, vec_size))
 
     # Gera um batch de imagens
-    gen_img = generator(noise, 1, step)
+    gen_img = generator(noise)
     f = plt.figure(figsize=(5,5))
     plt.imshow(gen_img[0] * 0.5 + 0.5)
     plt.axis('off')
@@ -176,8 +176,7 @@ def random_print_prog(generator, step, vec_size, save_destination = None, filena
     if save_destination != None and filename != None:
         f.savefig(save_destination + filename)
 
-    return f
-
+    return f, noise
 
 
 #%% PREPARAÇÃO DO DATASET
@@ -233,7 +232,6 @@ def prepare_dataset(files_string, image_size, batch_size, buffer_size = None, us
 
 
 #%% TRATAMENTO DE EXCEÇÕES
-    
 class GeneratorError(Exception):
     def __init__(self, gen_model):
         print("O gerador " + gen_model + " é desconhecido")
